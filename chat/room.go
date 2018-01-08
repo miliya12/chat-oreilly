@@ -4,13 +4,15 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/stretchr/objx"
+
 	"github.com/gorilla/websocket"
 	"github.com/miliya12/chat-oreilly/trace"
 )
 
 type room struct {
 	// forward is channel holding message send to other clients
-	forward chan []byte
+	forward chan *message
 	// join is channel for clients attempt to join chatroom
 	join chan *client
 	// leave is channel for clients attempt to leave chatroom
@@ -34,7 +36,7 @@ func (r *room) run() {
 			close(client.send)
 			r.tracer.Trace("クライアントが退室しました")
 		case msg := <-r.forward:
-			r.tracer.Trace("メッセージを受信しました: ", string(msg))
+			r.tracer.Trace("メッセージを受信しました: ", msg.Message)
 			// forward message to all clients
 			for client := range r.clients {
 				select {
@@ -66,10 +68,16 @@ func (r *room) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	authCookie, err := req.Cookie("auth")
+	if err != nil {
+		log.Fatal("クッキーの取得に失敗しました: ", err)
+		return
+	}
 	client := &client{
-		socket: socket,
-		send:   make(chan []byte, messageBufferSize),
-		room:   r,
+		socket:   socket,
+		send:     make(chan *message, messageBufferSize),
+		room:     r,
+		userData: objx.MustFromBase64(authCookie.Value),
 	}
 	r.join <- client
 	defer func() { r.leave <- client }()
@@ -79,7 +87,7 @@ func (r *room) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 func newRoom() *room {
 	return &room{
-		forward: make(chan []byte),
+		forward: make(chan *message),
 		join:    make(chan *client),
 		leave:   make(chan *client),
 		clients: make(map[*client]bool),
